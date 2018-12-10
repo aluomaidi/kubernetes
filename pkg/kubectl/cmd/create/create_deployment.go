@@ -17,14 +17,14 @@ limitations under the License.
 package create
 
 import (
-	"io"
-
 	"github.com/spf13/cobra"
 
-	"k8s.io/kubernetes/pkg/kubectl"
-	"k8s.io/kubernetes/pkg/kubectl/cmd/templates"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
 	cmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
+	"k8s.io/kubernetes/pkg/kubectl/generate"
+	generateversioned "k8s.io/kubernetes/pkg/kubectl/generate/versioned"
 	"k8s.io/kubernetes/pkg/kubectl/util/i18n"
+	"k8s.io/kubernetes/pkg/kubectl/util/templates"
 )
 
 var (
@@ -36,25 +36,36 @@ var (
 	kubectl create deployment my-dep --image=busybox`))
 )
 
+// DeploymentOpts is returned by NewCmdCreateDeployment
+type DeploymentOpts struct {
+	CreateSubcommandOptions *CreateSubcommandOptions
+}
+
 // NewCmdCreateDeployment is a macro command to create a new deployment.
 // This command is better known to users as `kubectl create deployment`.
 // Note that this command overlaps significantly with the `kubectl run` command.
-func NewCmdCreateDeployment(f cmdutil.Factory, cmdOut, cmdErr io.Writer) *cobra.Command {
+func NewCmdCreateDeployment(f cmdutil.Factory, ioStreams genericclioptions.IOStreams) *cobra.Command {
+	options := &DeploymentOpts{
+		CreateSubcommandOptions: NewCreateSubcommandOptions(ioStreams),
+	}
+
 	cmd := &cobra.Command{
-		Use: "deployment NAME --image=image [--dry-run]",
+		Use:                   "deployment NAME --image=image [--dry-run]",
 		DisableFlagsInUseLine: true,
 		Aliases:               []string{"deploy"},
 		Short:                 i18n.T("Create a deployment with the specified name."),
 		Long:                  deploymentLong,
 		Example:               deploymentExample,
 		Run: func(cmd *cobra.Command, args []string) {
-			err := createDeployment(f, cmdOut, cmdErr, cmd, args)
-			cmdutil.CheckErr(err)
+			cmdutil.CheckErr(options.Complete(f, cmd, args))
+			cmdutil.CheckErr(options.Run())
 		},
 	}
+
+	options.CreateSubcommandOptions.PrintFlags.AddFlags(cmd)
+
 	cmdutil.AddApplyAnnotationFlags(cmd)
 	cmdutil.AddValidateFlags(cmd)
-	cmdutil.AddPrinterFlags(cmd)
 	cmdutil.AddGeneratorFlags(cmd, "")
 	cmd.Flags().StringSlice("image", []string{}, "Image name to run.")
 	cmd.MarkFlagRequired("image")
@@ -68,30 +79,30 @@ func generatorFromName(
 	generatorName string,
 	imageNames []string,
 	deploymentName string,
-) (kubectl.StructuredGenerator, bool) {
+) (generate.StructuredGenerator, bool) {
 
 	switch generatorName {
-	case cmdutil.DeploymentBasicAppsV1GeneratorName:
-		generator := &kubectl.DeploymentBasicAppsGeneratorV1{
-			BaseDeploymentGenerator: kubectl.BaseDeploymentGenerator{
+	case generateversioned.DeploymentBasicAppsV1GeneratorName:
+		generator := &generateversioned.DeploymentBasicAppsGeneratorV1{
+			BaseDeploymentGenerator: generateversioned.BaseDeploymentGenerator{
 				Name:   deploymentName,
 				Images: imageNames,
 			},
 		}
 		return generator, true
 
-	case cmdutil.DeploymentBasicAppsV1Beta1GeneratorName:
-		generator := &kubectl.DeploymentBasicAppsGeneratorV1Beta1{
-			BaseDeploymentGenerator: kubectl.BaseDeploymentGenerator{
+	case generateversioned.DeploymentBasicAppsV1Beta1GeneratorName:
+		generator := &generateversioned.DeploymentBasicAppsGeneratorV1Beta1{
+			BaseDeploymentGenerator: generateversioned.BaseDeploymentGenerator{
 				Name:   deploymentName,
 				Images: imageNames,
 			},
 		}
 		return generator, true
 
-	case cmdutil.DeploymentBasicV1Beta1GeneratorName:
-		generator := &kubectl.DeploymentBasicGeneratorV1{
-			BaseDeploymentGenerator: kubectl.BaseDeploymentGenerator{
+	case generateversioned.DeploymentBasicV1Beta1GeneratorName:
+		generator := &generateversioned.DeploymentBasicGeneratorV1{
+			BaseDeploymentGenerator: generateversioned.BaseDeploymentGenerator{
 				Name:   deploymentName,
 				Images: imageNames,
 			},
@@ -102,19 +113,14 @@ func generatorFromName(
 	return nil, false
 }
 
-// createDeployment
-// 1. Reads user config values from Cobra.
-// 2. Sets up the correct Generator object.
-// 3. Calls RunCreateSubcommand.
-func createDeployment(f cmdutil.Factory, cmdOut, cmdErr io.Writer,
-	cmd *cobra.Command, args []string) error {
-
-	deploymentName, err := NameFromCommandArgs(cmd, args)
+// Complete completes all the options
+func (o *DeploymentOpts) Complete(f cmdutil.Factory, cmd *cobra.Command, args []string) error {
+	name, err := NameFromCommandArgs(cmd, args)
 	if err != nil {
 		return err
 	}
 
-	clientset, err := f.ClientSet()
+	clientset, err := f.KubernetesClientSet()
 	if err != nil {
 		return err
 	}
@@ -122,28 +128,28 @@ func createDeployment(f cmdutil.Factory, cmdOut, cmdErr io.Writer,
 	generatorName := cmdutil.GetFlagString(cmd, "generator")
 
 	if len(generatorName) == 0 {
-		generatorName = cmdutil.DeploymentBasicAppsV1GeneratorName
-		generatorNameTemp, err := cmdutil.FallbackGeneratorNameIfNecessary(generatorName, clientset.Discovery(), cmdErr)
+		generatorName = generateversioned.DeploymentBasicAppsV1GeneratorName
+		generatorNameTemp, err := generateversioned.FallbackGeneratorNameIfNecessary(generatorName, clientset.Discovery(), o.CreateSubcommandOptions.ErrOut)
 		if err != nil {
 			return err
 		}
 		if generatorNameTemp != generatorName {
-			cmdutil.Warning(cmdErr, generatorName, generatorNameTemp)
+			cmdutil.Warning(o.CreateSubcommandOptions.ErrOut, generatorName, generatorNameTemp)
 		} else {
 			generatorName = generatorNameTemp
 		}
 	}
 
 	imageNames := cmdutil.GetFlagStringSlice(cmd, "image")
-	generator, ok := generatorFromName(generatorName, imageNames, deploymentName)
+	generator, ok := generatorFromName(generatorName, imageNames, name)
 	if !ok {
 		return errUnsupportedGenerator(cmd, generatorName)
 	}
 
-	return RunCreateSubcommand(f, cmd, cmdOut, &CreateSubcommandOptions{
-		Name:                deploymentName,
-		StructuredGenerator: generator,
-		DryRun:              cmdutil.GetDryRunFlag(cmd),
-		OutputFormat:        cmdutil.GetFlagString(cmd, "output"),
-	})
+	return o.CreateSubcommandOptions.Complete(f, cmd, args, generator)
+}
+
+// Run performs the execution of 'create deployment' sub command
+func (o *DeploymentOpts) Run() error {
+	return o.CreateSubcommandOptions.Run()
 }

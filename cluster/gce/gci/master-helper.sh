@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Copyright 2016 The Kubernetes Authors.
 #
@@ -83,9 +83,6 @@ function create-master-instance-internal() {
     retries=30
     sleep_sec=60
   fi
-  if [[ "${ENABLE_IP_ALIASES:-}" == 'true' ]]; then
-    gcloud="gcloud beta"
-  fi
 
   local -r master_name="${1}"
   local -r address="${2:-}"
@@ -107,6 +104,7 @@ function create-master-instance-internal() {
     "${address:-}" "${enable_ip_aliases:-}" "${IP_ALIAS_SIZE:-}")
 
   local metadata="kube-env=${KUBE_TEMP}/master-kube-env.yaml"
+  metadata="${metadata},kubelet-config=${KUBE_TEMP}/master-kubelet-config.yaml"
   metadata="${metadata},user-data=${KUBE_ROOT}/cluster/gce/gci/master.yaml"
   metadata="${metadata},configure-sh=${KUBE_ROOT}/cluster/gce/gci/configure.sh"
   metadata="${metadata},cluster-location=${KUBE_TEMP}/cluster-location.txt"

@@ -19,13 +19,16 @@ package algorithm
 import (
 	"k8s.io/api/core/v1"
 	schedulerapi "k8s.io/kubernetes/pkg/scheduler/api"
-	"k8s.io/kubernetes/pkg/scheduler/schedulercache"
+	schedulercache "k8s.io/kubernetes/pkg/scheduler/cache"
 )
 
 // SchedulerExtender is an interface for external processes to influence scheduling
 // decisions made by Kubernetes. This is typically needed for resources not directly
 // managed by Kubernetes.
 type SchedulerExtender interface {
+	// Name returns a unique name that identifies the extender.
+	Name() string
+
 	// Filter based on extender-implemented predicate functions. The filtered list is
 	// expected to be a subset of the supplied list. failedNodesMap optionally contains
 	// the list of failed nodes and failure reasons.

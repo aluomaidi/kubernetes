@@ -17,14 +17,14 @@ limitations under the License.
 package create
 
 import (
-	"io"
-
 	"github.com/spf13/cobra"
 
-	"k8s.io/kubernetes/pkg/kubectl"
-	"k8s.io/kubernetes/pkg/kubectl/cmd/templates"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
 	cmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
+	"k8s.io/kubernetes/pkg/kubectl/generate"
+	generateversioned "k8s.io/kubernetes/pkg/kubectl/generate/versioned"
 	"k8s.io/kubernetes/pkg/kubectl/util/i18n"
+	"k8s.io/kubernetes/pkg/kubectl/util/templates"
 )
 
 var (
@@ -41,25 +41,35 @@ var (
 		kubectl create pdb my-pdb --selector=app=nginx --min-available=50%`))
 )
 
+// PodDisruptionBudgetOpts holds the command-line options for poddisruptionbudget sub command
+type PodDisruptionBudgetOpts struct {
+	CreateSubcommandOptions *CreateSubcommandOptions
+}
+
 // NewCmdCreatePodDisruptionBudget is a macro command to create a new pod disruption budget.
-func NewCmdCreatePodDisruptionBudget(f cmdutil.Factory, cmdOut io.Writer) *cobra.Command {
+func NewCmdCreatePodDisruptionBudget(f cmdutil.Factory, ioStreams genericclioptions.IOStreams) *cobra.Command {
+	options := &PodDisruptionBudgetOpts{
+		CreateSubcommandOptions: NewCreateSubcommandOptions(ioStreams),
+	}
+
 	cmd := &cobra.Command{
-		Use: "poddisruptionbudget NAME --selector=SELECTOR --min-available=N [--dry-run]",
+		Use:                   "poddisruptionbudget NAME --selector=SELECTOR --min-available=N [--dry-run]",
 		DisableFlagsInUseLine: true,
 		Aliases:               []string{"pdb"},
 		Short:                 i18n.T("Create a pod disruption budget with the specified name."),
 		Long:                  pdbLong,
 		Example:               pdbExample,
 		Run: func(cmd *cobra.Command, args []string) {
-			err := CreatePodDisruptionBudget(f, cmdOut, cmd, args)
-			cmdutil.CheckErr(err)
+			cmdutil.CheckErr(options.Complete(f, cmd, args))
+			cmdutil.CheckErr(options.Run())
 		},
 	}
 
+	options.CreateSubcommandOptions.PrintFlags.AddFlags(cmd)
+
 	cmdutil.AddApplyAnnotationFlags(cmd)
 	cmdutil.AddValidateFlags(cmd)
-	cmdutil.AddPrinterFlags(cmd)
-	cmdutil.AddGeneratorFlags(cmd, cmdutil.PodDisruptionBudgetV2GeneratorName)
+	cmdutil.AddGeneratorFlags(cmd, generateversioned.PodDisruptionBudgetV2GeneratorName)
 
 	cmd.Flags().String("min-available", "", i18n.T("The minimum number or percentage of available pods this budget requires."))
 	cmd.Flags().String("max-unavailable", "", i18n.T("The maximum number or percentage of unavailable pods this budget requires."))
@@ -67,22 +77,23 @@ func NewCmdCreatePodDisruptionBudget(f cmdutil.Factory, cmdOut io.Writer) *cobra
 	return cmd
 }
 
-// CreatePodDisruptionBudget implements the behavior to run the create pdb command.
-func CreatePodDisruptionBudget(f cmdutil.Factory, cmdOut io.Writer, cmd *cobra.Command, args []string) error {
+// Complete completes all the required options
+func (o *PodDisruptionBudgetOpts) Complete(f cmdutil.Factory, cmd *cobra.Command, args []string) error {
 	name, err := NameFromCommandArgs(cmd, args)
 	if err != nil {
 		return err
 	}
-	var generator kubectl.StructuredGenerator
+
+	var generator generate.StructuredGenerator
 	switch generatorName := cmdutil.GetFlagString(cmd, "generator"); generatorName {
-	case cmdutil.PodDisruptionBudgetV1GeneratorName:
-		generator = &kubectl.PodDisruptionBudgetV1Generator{
+	case generateversioned.PodDisruptionBudgetV1GeneratorName:
+		generator = &generateversioned.PodDisruptionBudgetV1Generator{
 			Name:         name,
 			MinAvailable: cmdutil.GetFlagString(cmd, "min-available"),
 			Selector:     cmdutil.GetFlagString(cmd, "selector"),
 		}
-	case cmdutil.PodDisruptionBudgetV2GeneratorName:
-		generator = &kubectl.PodDisruptionBudgetV2Generator{
+	case generateversioned.PodDisruptionBudgetV2GeneratorName:
+		generator = &generateversioned.PodDisruptionBudgetV2Generator{
 			Name:           name,
 			MinAvailable:   cmdutil.GetFlagString(cmd, "min-available"),
 			MaxUnavailable: cmdutil.GetFlagString(cmd, "max-unavailable"),
@@ -91,10 +102,11 @@ func CreatePodDisruptionBudget(f cmdutil.Factory, cmdOut io.Writer, cmd *cobra.C
 	default:
 		return errUnsupportedGenerator(cmd, generatorName)
 	}
-	return RunCreateSubcommand(f, cmd, cmdOut, &CreateSubcommandOptions{
-		Name:                name,
-		StructuredGenerator: generator,
-		DryRun:              cmdutil.GetDryRunFlag(cmd),
-		OutputFormat:        cmdutil.GetFlagString(cmd, "output"),
-	})
+
+	return o.CreateSubcommandOptions.Complete(f, cmd, args, generator)
+}
+
+// Run calls the CreateSubcommandOptions.Run in PodDisruptionBudgetOpts instance
+func (o *PodDisruptionBudgetOpts) Run() error {
+	return o.CreateSubcommandOptions.Run()
 }

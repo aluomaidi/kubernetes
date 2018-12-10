@@ -17,14 +17,14 @@ limitations under the License.
 package create
 
 import (
-	"io"
-
 	"github.com/spf13/cobra"
 
-	"k8s.io/kubernetes/pkg/kubectl"
-	"k8s.io/kubernetes/pkg/kubectl/cmd/templates"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
 	cmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
+	"k8s.io/kubernetes/pkg/kubectl/generate"
+	generateversioned "k8s.io/kubernetes/pkg/kubectl/generate/versioned"
 	"k8s.io/kubernetes/pkg/kubectl/util/i18n"
+	"k8s.io/kubernetes/pkg/kubectl/util/templates"
 )
 
 var (
@@ -36,45 +36,58 @@ var (
 	  kubectl create namespace my-namespace`))
 )
 
+// NamespaceOpts is the options for 'create namespare' sub command
+type NamespaceOpts struct {
+	CreateSubcommandOptions *CreateSubcommandOptions
+}
+
 // NewCmdCreateNamespace is a macro command to create a new namespace
-func NewCmdCreateNamespace(f cmdutil.Factory, cmdOut io.Writer) *cobra.Command {
+func NewCmdCreateNamespace(f cmdutil.Factory, ioStreams genericclioptions.IOStreams) *cobra.Command {
+	options := &NamespaceOpts{
+		CreateSubcommandOptions: NewCreateSubcommandOptions(ioStreams),
+	}
+
 	cmd := &cobra.Command{
-		Use: "namespace NAME [--dry-run]",
+		Use:                   "namespace NAME [--dry-run]",
 		DisableFlagsInUseLine: true,
 		Aliases:               []string{"ns"},
 		Short:                 i18n.T("Create a namespace with the specified name"),
 		Long:                  namespaceLong,
 		Example:               namespaceExample,
 		Run: func(cmd *cobra.Command, args []string) {
-			err := CreateNamespace(f, cmdOut, cmd, args)
-			cmdutil.CheckErr(err)
+			cmdutil.CheckErr(options.Complete(f, cmd, args))
+			cmdutil.CheckErr(options.Run())
 		},
 	}
+
+	options.CreateSubcommandOptions.PrintFlags.AddFlags(cmd)
+
 	cmdutil.AddApplyAnnotationFlags(cmd)
 	cmdutil.AddValidateFlags(cmd)
-	cmdutil.AddPrinterFlags(cmd)
-	cmdutil.AddGeneratorFlags(cmd, cmdutil.NamespaceV1GeneratorName)
+	cmdutil.AddGeneratorFlags(cmd, generateversioned.NamespaceV1GeneratorName)
 
 	return cmd
 }
 
-// CreateNamespace implements the behavior to run the create namespace command
-func CreateNamespace(f cmdutil.Factory, cmdOut io.Writer, cmd *cobra.Command, args []string) error {
+// Complete completes all the required options
+func (o *NamespaceOpts) Complete(f cmdutil.Factory, cmd *cobra.Command, args []string) error {
 	name, err := NameFromCommandArgs(cmd, args)
 	if err != nil {
 		return err
 	}
-	var generator kubectl.StructuredGenerator
+
+	var generator generate.StructuredGenerator
 	switch generatorName := cmdutil.GetFlagString(cmd, "generator"); generatorName {
-	case cmdutil.NamespaceV1GeneratorName:
-		generator = &kubectl.NamespaceGeneratorV1{Name: name}
+	case generateversioned.NamespaceV1GeneratorName:
+		generator = &generateversioned.NamespaceGeneratorV1{Name: name}
 	default:
 		return errUnsupportedGenerator(cmd, generatorName)
 	}
-	return RunCreateSubcommand(f, cmd, cmdOut, &CreateSubcommandOptions{
-		Name:                name,
-		StructuredGenerator: generator,
-		DryRun:              cmdutil.GetDryRunFlag(cmd),
-		OutputFormat:        cmdutil.GetFlagString(cmd, "output"),
-	})
+
+	return o.CreateSubcommandOptions.Complete(f, cmd, args, generator)
+}
+
+// Run calls the CreateSubcommandOptions.Run in NamespaceOpts instance
+func (o *NamespaceOpts) Run() error {
+	return o.CreateSubcommandOptions.Run()
 }

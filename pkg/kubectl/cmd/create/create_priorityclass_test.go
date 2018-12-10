@@ -23,10 +23,11 @@ import (
 	"testing"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
 	restclient "k8s.io/client-go/rest"
 	"k8s.io/client-go/rest/fake"
-	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	cmdtesting "k8s.io/kubernetes/pkg/kubectl/cmd/testing"
+	"k8s.io/kubernetes/pkg/kubectl/scheme"
 )
 
 func TestCreatePriorityClass(t *testing.T) {
@@ -34,10 +35,10 @@ func TestCreatePriorityClass(t *testing.T) {
 	tf := cmdtesting.NewTestFactory()
 	defer tf.Cleanup()
 
-	ns := legacyscheme.Codecs
+	ns := scheme.Codecs
 
 	tf.Client = &fake.RESTClient{
-		GroupVersion:         schema.GroupVersion{Group: "scheduling.k8s.io", Version: "v1alpha1"},
+		GroupVersion:         schema.GroupVersion{Group: "scheduling.k8s.io", Version: "v1beta1"},
 		NegotiatedSerializer: ns,
 		Client: fake.CreateHTTPClient(func(req *http.Request) (*http.Response, error) {
 			return &http.Response{
@@ -47,15 +48,37 @@ func TestCreatePriorityClass(t *testing.T) {
 		}),
 	}
 	tf.ClientConfigVal = &restclient.Config{}
-	buf := bytes.NewBuffer([]byte{})
 
-	cmd := NewCmdCreatePriorityClass(tf, buf)
+	outputFormat := "name"
+
+	ioStreams, _, buf, _ := genericclioptions.NewTestIOStreams()
+	cmd := NewCmdCreatePriorityClass(tf, ioStreams)
 	cmd.Flags().Set("value", "1000")
 	cmd.Flags().Set("global-default", "true")
 	cmd.Flags().Set("description", "my priority")
 	cmd.Flags().Set("dry-run", "true")
-	cmd.Flags().Set("output", "name")
-	CreatePriorityClass(tf, buf, cmd, []string{pcName})
+	cmd.Flags().Set("output", outputFormat)
+
+	printFlags := genericclioptions.NewPrintFlags("created").WithTypeSetter(scheme.Scheme)
+	printFlags.OutputFormat = &outputFormat
+
+	options := &PriorityClassOpts{
+		CreateSubcommandOptions: &CreateSubcommandOptions{
+			PrintFlags: printFlags,
+			Name:       pcName,
+			IOStreams:  ioStreams,
+		},
+	}
+	err := options.Complete(tf, cmd, []string{pcName})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	err = options.Run()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
 	expectedOutput := "priorityclass.scheduling.k8s.io/" + pcName + "\n"
 	if buf.String() != expectedOutput {
 		t.Errorf("expected output: %s, but got: %s", expectedOutput, buf.String())

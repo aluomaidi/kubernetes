@@ -17,27 +17,27 @@ limitations under the License.
 package create
 
 import (
-	"io"
-
 	"github.com/spf13/cobra"
 
-	"k8s.io/kubernetes/pkg/kubectl"
-	"k8s.io/kubernetes/pkg/kubectl/cmd/templates"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
 	cmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
+	"k8s.io/kubernetes/pkg/kubectl/generate"
+	generateversioned "k8s.io/kubernetes/pkg/kubectl/generate/versioned"
 	"k8s.io/kubernetes/pkg/kubectl/util/i18n"
+	"k8s.io/kubernetes/pkg/kubectl/util/templates"
 )
 
 // NewCmdCreateSecret groups subcommands to create various types of secrets
-func NewCmdCreateSecret(f cmdutil.Factory, cmdOut, errOut io.Writer) *cobra.Command {
+func NewCmdCreateSecret(f cmdutil.Factory, ioStreams genericclioptions.IOStreams) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "secret",
 		Short: i18n.T("Create a secret using specified subcommand"),
 		Long:  "Create a secret using specified subcommand.",
-		Run:   cmdutil.DefaultSubCommandRun(errOut),
+		Run:   cmdutil.DefaultSubCommandRun(ioStreams.ErrOut),
 	}
-	cmd.AddCommand(NewCmdCreateSecretDockerRegistry(f, cmdOut))
-	cmd.AddCommand(NewCmdCreateSecretTLS(f, cmdOut))
-	cmd.AddCommand(NewCmdCreateSecretGeneric(f, cmdOut))
+	cmd.AddCommand(NewCmdCreateSecretDockerRegistry(f, ioStreams))
+	cmd.AddCommand(NewCmdCreateSecretTLS(f, ioStreams))
+	cmd.AddCommand(NewCmdCreateSecretGeneric(f, ioStreams))
 
 	return cmd
 }
@@ -73,23 +73,34 @@ var (
 	  kubectl create secret generic my-secret --from-env-file=path/to/bar.env`))
 )
 
+// SecretGenericOpts holds the options for 'create secret' sub command
+type SecretGenericOpts struct {
+	CreateSubcommandOptions *CreateSubcommandOptions
+}
+
 // NewCmdCreateSecretGeneric is a command to create generic secrets from files, directories, or literal values
-func NewCmdCreateSecretGeneric(f cmdutil.Factory, cmdOut io.Writer) *cobra.Command {
+func NewCmdCreateSecretGeneric(f cmdutil.Factory, ioStreams genericclioptions.IOStreams) *cobra.Command {
+	options := &SecretGenericOpts{
+		CreateSubcommandOptions: NewCreateSubcommandOptions(ioStreams),
+	}
+
 	cmd := &cobra.Command{
-		Use: "generic NAME [--type=string] [--from-file=[key=]source] [--from-literal=key1=value1] [--dry-run]",
+		Use:                   "generic NAME [--type=string] [--from-file=[key=]source] [--from-literal=key1=value1] [--dry-run]",
 		DisableFlagsInUseLine: true,
-		Short:   i18n.T("Create a secret from a local file, directory or literal value"),
-		Long:    secretLong,
-		Example: secretExample,
+		Short:                 i18n.T("Create a secret from a local file, directory or literal value"),
+		Long:                  secretLong,
+		Example:               secretExample,
 		Run: func(cmd *cobra.Command, args []string) {
-			err := CreateSecretGeneric(f, cmdOut, cmd, args)
-			cmdutil.CheckErr(err)
+			cmdutil.CheckErr(options.Complete(f, cmd, args))
+			cmdutil.CheckErr(options.Run())
 		},
 	}
+
+	options.CreateSubcommandOptions.PrintFlags.AddFlags(cmd)
+
 	cmdutil.AddApplyAnnotationFlags(cmd)
 	cmdutil.AddValidateFlags(cmd)
-	cmdutil.AddPrinterFlags(cmd)
-	cmdutil.AddGeneratorFlags(cmd, cmdutil.SecretV1GeneratorName)
+	cmdutil.AddGeneratorFlags(cmd, generateversioned.SecretV1GeneratorName)
 	cmd.Flags().StringSlice("from-file", []string{}, "Key files can be specified using their file path, in which case a default name will be given to them, or optionally with a name and file path, in which case the given name will be used.  Specifying a directory will iterate each named file in the directory that is a valid secret key.")
 	cmd.Flags().StringArray("from-literal", []string{}, "Specify a key and literal value to insert in secret (i.e. mykey=somevalue)")
 	cmd.Flags().String("from-env-file", "", "Specify the path to a file to read lines of key=val pairs to create a secret (i.e. a Docker .env file).")
@@ -98,16 +109,17 @@ func NewCmdCreateSecretGeneric(f cmdutil.Factory, cmdOut io.Writer) *cobra.Comma
 	return cmd
 }
 
-// CreateSecretGeneric is the implementation of the create secret generic command
-func CreateSecretGeneric(f cmdutil.Factory, cmdOut io.Writer, cmd *cobra.Command, args []string) error {
+// Complete completes all the required options
+func (o *SecretGenericOpts) Complete(f cmdutil.Factory, cmd *cobra.Command, args []string) error {
 	name, err := NameFromCommandArgs(cmd, args)
 	if err != nil {
 		return err
 	}
-	var generator kubectl.StructuredGenerator
+
+	var generator generate.StructuredGenerator
 	switch generatorName := cmdutil.GetFlagString(cmd, "generator"); generatorName {
-	case cmdutil.SecretV1GeneratorName:
-		generator = &kubectl.SecretGeneratorV1{
+	case generateversioned.SecretV1GeneratorName:
+		generator = &generateversioned.SecretGeneratorV1{
 			Name:           name,
 			Type:           cmdutil.GetFlagString(cmd, "type"),
 			FileSources:    cmdutil.GetFlagStringSlice(cmd, "from-file"),
@@ -118,12 +130,13 @@ func CreateSecretGeneric(f cmdutil.Factory, cmdOut io.Writer, cmd *cobra.Command
 	default:
 		return errUnsupportedGenerator(cmd, generatorName)
 	}
-	return RunCreateSubcommand(f, cmd, cmdOut, &CreateSubcommandOptions{
-		Name:                name,
-		StructuredGenerator: generator,
-		DryRun:              cmdutil.GetDryRunFlag(cmd),
-		OutputFormat:        cmdutil.GetFlagString(cmd, "output"),
-	})
+
+	return o.CreateSubcommandOptions.Complete(f, cmd, args, generator)
+}
+
+// Run calls the CreateSubcommandOptions.Run in SecretGenericOpts instance
+func (o *SecretGenericOpts) Run() error {
+	return o.CreateSubcommandOptions.Run()
 }
 
 var (
@@ -147,23 +160,34 @@ var (
 		  kubectl create secret docker-registry my-secret --docker-server=DOCKER_REGISTRY_SERVER --docker-username=DOCKER_USER --docker-password=DOCKER_PASSWORD --docker-email=DOCKER_EMAIL`))
 )
 
+// SecretDockerRegistryOpts holds the options for 'create secret docker-registry' sub command
+type SecretDockerRegistryOpts struct {
+	CreateSubcommandOptions *CreateSubcommandOptions
+}
+
 // NewCmdCreateSecretDockerRegistry is a macro command for creating secrets to work with Docker registries
-func NewCmdCreateSecretDockerRegistry(f cmdutil.Factory, cmdOut io.Writer) *cobra.Command {
+func NewCmdCreateSecretDockerRegistry(f cmdutil.Factory, ioStreams genericclioptions.IOStreams) *cobra.Command {
+	options := &SecretDockerRegistryOpts{
+		CreateSubcommandOptions: NewCreateSubcommandOptions(ioStreams),
+	}
+
 	cmd := &cobra.Command{
-		Use: "docker-registry NAME --docker-username=user --docker-password=password --docker-email=email [--docker-server=string] [--from-literal=key1=value1] [--dry-run]",
+		Use:                   "docker-registry NAME --docker-username=user --docker-password=password --docker-email=email [--docker-server=string] [--from-literal=key1=value1] [--dry-run]",
 		DisableFlagsInUseLine: true,
-		Short:   i18n.T("Create a secret for use with a Docker registry"),
-		Long:    secretForDockerRegistryLong,
-		Example: secretForDockerRegistryExample,
+		Short:                 i18n.T("Create a secret for use with a Docker registry"),
+		Long:                  secretForDockerRegistryLong,
+		Example:               secretForDockerRegistryExample,
 		Run: func(cmd *cobra.Command, args []string) {
-			err := CreateSecretDockerRegistry(f, cmdOut, cmd, args)
-			cmdutil.CheckErr(err)
+			cmdutil.CheckErr(options.Complete(f, cmd, args))
+			cmdutil.CheckErr(options.Run())
 		},
 	}
+
+	options.CreateSubcommandOptions.PrintFlags.AddFlags(cmd)
+
 	cmdutil.AddApplyAnnotationFlags(cmd)
 	cmdutil.AddValidateFlags(cmd)
-	cmdutil.AddPrinterFlags(cmd)
-	cmdutil.AddGeneratorFlags(cmd, cmdutil.SecretForDockerRegistryV1GeneratorName)
+	cmdutil.AddGeneratorFlags(cmd, generateversioned.SecretForDockerRegistryV1GeneratorName)
 	cmd.Flags().String("docker-username", "", i18n.T("Username for Docker registry authentication"))
 	cmd.MarkFlagRequired("docker-username")
 	cmd.Flags().String("docker-password", "", i18n.T("Password for Docker registry authentication"))
@@ -173,16 +197,16 @@ func NewCmdCreateSecretDockerRegistry(f cmdutil.Factory, cmdOut io.Writer) *cobr
 	cmd.Flags().Bool("append-hash", false, "Append a hash of the secret to its name.")
 	cmd.Flags().StringSlice("from-file", []string{}, "Key files can be specified using their file path, in which case a default name will be given to them, or optionally with a name and file path, in which case the given name will be used.  Specifying a directory will iterate each named file in the directory that is a valid secret key.")
 
-	cmdutil.AddInclude3rdPartyFlags(cmd)
 	return cmd
 }
 
-// CreateSecretDockerRegistry is the implementation of the create secret docker-registry command
-func CreateSecretDockerRegistry(f cmdutil.Factory, cmdOut io.Writer, cmd *cobra.Command, args []string) error {
+// Complete completes all the required options
+func (o *SecretDockerRegistryOpts) Complete(f cmdutil.Factory, cmd *cobra.Command, args []string) error {
 	name, err := NameFromCommandArgs(cmd, args)
 	if err != nil {
 		return err
 	}
+
 	fromFileFlag := cmdutil.GetFlagStringSlice(cmd, "from-file")
 	if len(fromFileFlag) == 0 {
 		requiredFlags := []string{"docker-username", "docker-password", "docker-server"}
@@ -193,10 +217,10 @@ func CreateSecretDockerRegistry(f cmdutil.Factory, cmdOut io.Writer, cmd *cobra.
 		}
 	}
 
-	var generator kubectl.StructuredGenerator
+	var generator generate.StructuredGenerator
 	switch generatorName := cmdutil.GetFlagString(cmd, "generator"); generatorName {
-	case cmdutil.SecretForDockerRegistryV1GeneratorName:
-		generator = &kubectl.SecretForDockerRegistryGeneratorV1{
+	case generateversioned.SecretForDockerRegistryV1GeneratorName:
+		generator = &generateversioned.SecretForDockerRegistryGeneratorV1{
 			Name:        name,
 			Username:    cmdutil.GetFlagString(cmd, "docker-username"),
 			Email:       cmdutil.GetFlagString(cmd, "docker-email"),
@@ -208,12 +232,13 @@ func CreateSecretDockerRegistry(f cmdutil.Factory, cmdOut io.Writer, cmd *cobra.
 	default:
 		return errUnsupportedGenerator(cmd, generatorName)
 	}
-	return RunCreateSubcommand(f, cmd, cmdOut, &CreateSubcommandOptions{
-		Name:                name,
-		StructuredGenerator: generator,
-		DryRun:              cmdutil.GetDryRunFlag(cmd),
-		OutputFormat:        cmdutil.GetFlagString(cmd, "output"),
-	})
+
+	return o.CreateSubcommandOptions.Complete(f, cmd, args, generator)
+}
+
+// Run calls CreateSubcommandOptions.Run in SecretDockerRegistryOpts instance
+func (o *SecretDockerRegistryOpts) Run() error {
+	return o.CreateSubcommandOptions.Run()
 }
 
 var (
@@ -228,45 +253,57 @@ var (
 	  kubectl create secret tls tls-secret --cert=path/to/tls.cert --key=path/to/tls.key`))
 )
 
+// SecretTLSOpts holds the options for 'create secret tls' sub command
+type SecretTLSOpts struct {
+	CreateSubcommandOptions *CreateSubcommandOptions
+}
+
 // NewCmdCreateSecretTLS is a macro command for creating secrets to work with Docker registries
-func NewCmdCreateSecretTLS(f cmdutil.Factory, cmdOut io.Writer) *cobra.Command {
+func NewCmdCreateSecretTLS(f cmdutil.Factory, ioStreams genericclioptions.IOStreams) *cobra.Command {
+	options := &SecretTLSOpts{
+		CreateSubcommandOptions: NewCreateSubcommandOptions(ioStreams),
+	}
+
 	cmd := &cobra.Command{
-		Use: "tls NAME --cert=path/to/cert/file --key=path/to/key/file [--dry-run]",
+		Use:                   "tls NAME --cert=path/to/cert/file --key=path/to/key/file [--dry-run]",
 		DisableFlagsInUseLine: true,
-		Short:   i18n.T("Create a TLS secret"),
-		Long:    secretForTLSLong,
-		Example: secretForTLSExample,
+		Short:                 i18n.T("Create a TLS secret"),
+		Long:                  secretForTLSLong,
+		Example:               secretForTLSExample,
 		Run: func(cmd *cobra.Command, args []string) {
-			err := CreateSecretTLS(f, cmdOut, cmd, args)
-			cmdutil.CheckErr(err)
+			cmdutil.CheckErr(options.Complete(f, cmd, args))
+			cmdutil.CheckErr(options.Run())
 		},
 	}
+
+	options.CreateSubcommandOptions.PrintFlags.AddFlags(cmd)
+
 	cmdutil.AddApplyAnnotationFlags(cmd)
 	cmdutil.AddValidateFlags(cmd)
-	cmdutil.AddPrinterFlags(cmd)
-	cmdutil.AddGeneratorFlags(cmd, cmdutil.SecretForTLSV1GeneratorName)
+	cmdutil.AddGeneratorFlags(cmd, generateversioned.SecretForTLSV1GeneratorName)
 	cmd.Flags().String("cert", "", i18n.T("Path to PEM encoded public key certificate."))
 	cmd.Flags().String("key", "", i18n.T("Path to private key associated with given certificate."))
 	cmd.Flags().Bool("append-hash", false, "Append a hash of the secret to its name.")
 	return cmd
 }
 
-// CreateSecretTLS is the implementation of the create secret tls command
-func CreateSecretTLS(f cmdutil.Factory, cmdOut io.Writer, cmd *cobra.Command, args []string) error {
+// Complete completes all the required options
+func (o *SecretTLSOpts) Complete(f cmdutil.Factory, cmd *cobra.Command, args []string) error {
 	name, err := NameFromCommandArgs(cmd, args)
 	if err != nil {
 		return err
 	}
+
 	requiredFlags := []string{"cert", "key"}
 	for _, requiredFlag := range requiredFlags {
 		if value := cmdutil.GetFlagString(cmd, requiredFlag); len(value) == 0 {
 			return cmdutil.UsageErrorf(cmd, "flag %s is required", requiredFlag)
 		}
 	}
-	var generator kubectl.StructuredGenerator
+	var generator generate.StructuredGenerator
 	switch generatorName := cmdutil.GetFlagString(cmd, "generator"); generatorName {
-	case cmdutil.SecretForTLSV1GeneratorName:
-		generator = &kubectl.SecretForTLSGeneratorV1{
+	case generateversioned.SecretForTLSV1GeneratorName:
+		generator = &generateversioned.SecretForTLSGeneratorV1{
 			Name:       name,
 			Key:        cmdutil.GetFlagString(cmd, "key"),
 			Cert:       cmdutil.GetFlagString(cmd, "cert"),
@@ -275,10 +312,11 @@ func CreateSecretTLS(f cmdutil.Factory, cmdOut io.Writer, cmd *cobra.Command, ar
 	default:
 		return errUnsupportedGenerator(cmd, generatorName)
 	}
-	return RunCreateSubcommand(f, cmd, cmdOut, &CreateSubcommandOptions{
-		Name:                name,
-		StructuredGenerator: generator,
-		DryRun:              cmdutil.GetDryRunFlag(cmd),
-		OutputFormat:        cmdutil.GetFlagString(cmd, "output"),
-	})
+
+	return o.CreateSubcommandOptions.Complete(f, cmd, args, generator)
+}
+
+// Run calls CreateSubcommandOptions.Run in the SecretTLSOpts instance
+func (o *SecretTLSOpts) Run() error {
+	return o.CreateSubcommandOptions.Run()
 }

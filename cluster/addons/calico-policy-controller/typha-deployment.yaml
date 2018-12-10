@@ -23,7 +23,7 @@ spec:
       hostNetwork: true
       serviceAccountName: calico
       containers:
-      - image: gcr.io/projectcalico-org/typha:v0.5.6
+      - image: gcr.io/projectcalico-org/typha:v3.3.1
         name: calico-typha
         ports:
         - containerPort: 5473
@@ -44,6 +44,8 @@ spec:
             value: "9093"
           - name: TYPHA_DATASTORETYPE
             value: "kubernetes"
+          - name: TYPHA_REPORTINGINTERVALSECS
+            value: "0"
           - name: TYPHA_MAXCONNECTIONSLOWERLIMIT
             value: "1"
           - name: TYPHA_HEALTHENABLED
@@ -56,12 +58,14 @@ spec:
           httpGet:
             path: /liveness
             port: 9098
+            host: localhost
           periodSeconds: 30
           initialDelaySeconds: 30
         readinessProbe:
           httpGet:
             path: /readiness
             port: 9098
+            host: localhost
           periodSeconds: 10
       volumes:
       - name: etc-calico
